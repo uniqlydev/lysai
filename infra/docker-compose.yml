@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: pagila
       POSTGRES_PASSWORD: pagila
     ports:
-      - "5432:5432"
+      - "6543:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
