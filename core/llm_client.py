@@ -86,3 +86,9 @@ def build_llm() -> BaseLLM:
         return GeminiLLM()
     # Extendable: support OpenAI, Claude, Ollama, etc.
     return GeminiLLM()
+
+def get_llm() -> BaseLLM:
+    """Get a singleton LLM instance."""
+    if not hasattr(get_llm, "_instance"):
+        get_llm._instance = build_llm()
+    return get_llm._instance
