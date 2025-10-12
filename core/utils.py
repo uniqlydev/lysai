@@ -1,5 +1,5 @@
 import os, json 
-import llm_client
+from core.llm_client import get_llm
 
 
 def llm_json(system: str, user: str) -> dict:
@@ -7,7 +7,7 @@ def llm_json(system: str, user: str) -> dict:
     Ask LLm to respond in JSON only. If it fails, we try to recover
     """
 
-    model = llm_client.get_llm()
+    model = get_llm()
 
     resp = model.generate(user)
 

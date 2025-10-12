@@ -27,8 +27,8 @@ def planner_node(state: AgentState) -> AgentState:
         temperature=0.3,
         max_retries=3,
     )
-    parsed = llm_json(response.text)
-    state.plan = parsed.get("plan", [])
+    parsed = llm_json(response.text, user=state.question)
+    state.plan = parsed.get("plan", {})
     state.sql = parsed.get("sql_candidate", "")
     state.history.append({
         "role": "planner",
