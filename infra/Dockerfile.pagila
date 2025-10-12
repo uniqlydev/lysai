@@ -1,0 +1,42 @@
+# Build a Postgres image that auto-initializes with Pagila
+FROM postgres:16
+
+# (Optional) faster, reproducible builds
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Get git to clone the pagila repo during the build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Clone the official Pagila repo
+RUN git clone --depth 1 https://github.com/xzilla/pagila.git /tmp/pagila
+
+# Copy Pagila schema/data into the Postgres init directory
+# Files here are executed only on first container start when the data dir is empty
+RUN mkdir -p /docker-entrypoint-initdb.d \
+ && cp /tmp/pagila/pagila-schema.sql /docker-entrypoint-initdb.d/02_pagila-schema.sql \
+ && cp /tmp/pagila/pagila-data.sql   /docker-entrypoint-initdb.d/03_pagila-data.sql
+
+# Also copy files to /opt/pagila/ for use by the initialization script
+RUN mkdir -p /opt/pagila \
+ && cp /tmp/pagila/pagila-schema.sql /opt/pagila/pagila-schema.sql \
+ && cp /tmp/pagila/pagila-data.sql   /opt/pagila/pagila-data.sql
+
+# Copy and run the schema fix script
+COPY fix_pagila_schema.sh /tmp/fix_pagila_schema.sh
+RUN chmod +x /tmp/fix_pagila_schema.sh && /tmp/fix_pagila_schema.sh
+
+# Rename duplicate files so they won't be executed (PostgreSQL only runs .sql and .sh files)
+RUN mv /docker-entrypoint-initdb.d/02_pagila-schema.sql /docker-entrypoint-initdb.d/02_pagila-schema.sql.backup \
+ && mv /docker-entrypoint-initdb.d/03_pagila-data.sql /docker-entrypoint-initdb.d/03_pagila-data.sql.backup
+
+# Optional: ensure the database named `pagila` is created before loading schema/data
+# The official entrypoint will run *.sh with bash and *.sql with psql against POSTGRES_DB
+COPY docker-init/00_init_pagila.sh /docker-entrypoint-initdb.d/00_init_pagila.sh
+RUN chmod +x /docker-entrypoint-initdb.d/00_init_pagila.sh
+
+# Default envs can be overridden by docker-compose or docker run
+ENV POSTGRES_DB=pagila \
+    POSTGRES_USER=pagila \
+    POSTGRES_PASSWORD=pagila
