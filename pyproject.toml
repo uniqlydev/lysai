@@ -5,6 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "asyncio>=4.0.0",
+    "fastmcp>=2.12.4",
     "google-genai>=1.43.0",
     "httpx>=0.28.1",
     "langgraph>=0.6.10",

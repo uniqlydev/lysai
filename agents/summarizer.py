@@ -13,12 +13,28 @@ def summarizer_node(state: AgentState) -> AgentState:
     """
     Summarizer Node that generates insights from tabular data.
     """
+    from core.llm_client import get_llm
 
     rows_preview = (state.rows or [])[:5]  
 
-    user = f"Question: {state.question}\nRows: {rows_preview}"
+    user_prompt = f"Question: {state.question}\nRows: {rows_preview}"
 
-    j = llm_json(SUMMARIZER_SYS, user=user)
+    llm = get_llm()
+    response = llm.generate(
+        prompt=user_prompt,
+        system_instruction=SUMMARIZER_SYS,
+        json_mode=True,
+        temperature=0.3,
+        max_retries=3,
+    )
+    
+    # Parse the JSON response
+    try:
+        import json
+        j = json.loads(response.text.strip())
+    except json.JSONDecodeError:
+        # Fallback to empty dict if parsing fails
+        j = {"insight": "Failed to parse summary", "caveats": "JSON parsing error"}
 
     state.history.append({
         "summarizer": j
