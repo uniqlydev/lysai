@@ -29,9 +29,15 @@ async def pdf_generator_node(state: AgentState) -> AgentState:
             summary_data = entry["summarizer"]
             # Handle case where summarizer data is a list
             if isinstance(summary_data, list) and len(summary_data) > 0:
-                insight = summary_data[0].get("insight", "")
+                first_item = summary_data[0]
+                if isinstance(first_item, dict):
+                    # Check for nested response structure
+                    response_data = first_item.get("response", first_item)
+                    insight = response_data.get("insight", "")
             elif isinstance(summary_data, dict):
-                insight = summary_data.get("insight", "")
+                # Check for nested response structure
+                response_data = summary_data.get("response", summary_data)
+                insight = response_data.get("insight", "")
             break
     
     if not insight:

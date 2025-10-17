@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from typing import Any, Optional, Iterable, Union, List
 import os
 import time
+import json
+import requests
 import dotenv
 
 dotenv.load_dotenv()
@@ -83,13 +85,220 @@ class GeminiLLM(BaseLLM):
                 time.sleep(0.8 * (2 ** attempt))
 
 
+class Rev21LLM(BaseLLM):
+    """
+    Rev21 API LLM wrapper for fallback functionality.
+    """
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or os.getenv("REV21_API_KEY")
+        self.base_url = "https://ai-tools.rev21labs.com/api/v1/ai/prompt"
+        
+        if not self.api_key:
+            raise ValueError("REV21_API_KEY is required")
+
+    def generate(
+        self,
+        prompt: Union[str, Iterable[Any]],
+        *,
+        system_instruction: Optional[str] = None,
+        json_mode: bool = False,
+        temperature: float = 0.3,
+        max_retries: int = 3,
+        **kwargs,
+    ) -> LLMResponse:
+        # Prepare the prompt content
+        if isinstance(prompt, str):
+            content = prompt
+        else:
+            content = str(prompt)
+        
+        # Add system instruction if provided
+        if system_instruction:
+            content = f"System: {system_instruction}\n\nUser: {content}"
+        
+        # Prepare expected output format for JSON mode
+        expected_output = {}
+        if json_mode:
+            # For orchestrator and structured responses, define the expected format
+            if "action" in content.lower() or "orchestrator" in content.lower():
+                expected_output = {
+                    "action": "action name like PLAN or EXECUTE",
+                    "reason": "brief explanation"
+                }
+            else:
+                expected_output = {"response": "structured JSON response"}
+            content += "\n\nRespond with valid JSON only."
+        
+        payload = {
+            "prompt": content,
+            "content": content,
+            "expected_output": expected_output
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.api_key
+        }
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    self.base_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
+                response.raise_for_status()
+                
+                result = response.json()
+                
+                # Rev21 API returns structured responses differently based on expected_output
+                if json_mode or expected_output:
+                    # For structured responses, Rev21 returns fields directly
+                    # Convert to JSON string format that our agents expect
+                    text = json.dumps(result)
+                else:
+                    # For simple responses, look for common response fields
+                    text = result.get("answer", result.get("content", ""))
+                    if not text:
+                        # If no standard fields, just use the first value
+                        text = str(next(iter(result.values()), ""))
+                
+                return LLMResponse(text=text, raw=result)
+                
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(0.8 * (2 ** attempt))
+
+
+class FallbackLLM(BaseLLM):
+    """
+    LLM wrapper that can use any primary and fallback LLM.
+    """
+    
+    def __init__(self, primary: BaseLLM, fallback: BaseLLM):
+        self.primary_llm = primary
+        self.fallback_llm = fallback
+    
+    def generate(
+        self,
+        prompt: Union[str, Iterable[Any]],
+        *,
+        system_instruction: Optional[str] = None,
+        json_mode: bool = False,
+        temperature: float = 0.3,
+        max_retries: int = 3,
+        **kwargs,
+    ) -> LLMResponse:
+        # Try primary LLM first
+        try:
+            return self.primary_llm.generate(
+                prompt,
+                system_instruction=system_instruction,
+                json_mode=json_mode,
+                temperature=temperature,
+                max_retries=max_retries,
+                **kwargs
+            )
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Check if it's a resource exhaustion error or any error if we want to always fallback
+            print(f"Primary LLM ({type(self.primary_llm).__name__}) failed: {e}")
+            print(f"Trying fallback LLM ({type(self.fallback_llm).__name__})...")
+            
+            try:
+                return self.fallback_llm.generate(
+                    prompt,
+                    system_instruction=system_instruction,
+                    json_mode=json_mode,
+                    temperature=temperature,
+                    max_retries=max_retries,
+                    **kwargs
+                )
+            except Exception as fallback_error:
+                print(f"Fallback LLM also failed: {fallback_error}")
+                
+                # If both APIs fail with rate limiting, provide a simple fallback
+                if ("429" in str(e) or "rate" in str(e).lower() or "quota" in str(e).lower()) and \
+                   ("429" in str(fallback_error) or "rate" in str(fallback_error).lower() or "quota" in str(fallback_error).lower()):
+                    print("Both APIs are rate limited. Using simple fallback logic...")
+                    return self._simple_fallback_response(prompt, system_instruction, json_mode)
+                
+                raise e  # Raise the original error
+
+
+    def _simple_fallback_response(self, prompt: str, system_instruction: str = None, json_mode: bool = False) -> LLMResponse:
+        """Provide a simple fallback response when both APIs are exhausted"""
+        
+        # Simple heuristics for common orchestrator decisions
+        prompt_lower = str(prompt).lower()
+        
+        if "what action should be taken next" in prompt_lower:
+            # This is an orchestrator prompt
+            if "tools available: no" in prompt_lower or "tools available: missing" in prompt_lower:
+                response = "INSPECT_TOOLS\nNeed to examine available tools first."
+            elif "plan exists: no" in prompt_lower:
+                response = "PLAN\nNeed to create a plan to answer the question."
+            elif "sql query: no" in prompt_lower and "plan exists: yes" in prompt_lower:
+                response = "EXECUTE\nNeed to execute the SQL query to get data."
+            elif "has results: yes" in prompt_lower and "has insights: no" in prompt_lower:
+                response = "SUMMARIZE\nNeed to generate insights from the results."
+            elif "pdf requested: yes" in prompt_lower and "has insights: yes" in prompt_lower:
+                response = "GENERATE_PDF\nNeed to create the requested PDF report."
+            else:
+                response = "DONE\nTask appears to be complete."
+                
+        elif json_mode and ("plan" in prompt_lower or "sql" in prompt_lower):
+            # This is a planner prompt
+            response = '''{"plan": ["Analyze the question", "Generate appropriate SQL query", "Execute and return results"], "sql_candidate": "SELECT * FROM actor LIMIT 10;", "rationale": "Simple fallback query due to API limitations"}'''
+            
+        else:
+            # Generic fallback
+            response = "I apologize, but I'm currently unable to process this request due to API limitations. Please try again later."
+        
+        if json_mode and not response.startswith('{'):
+            # Wrap in JSON if needed
+            response = f'{{"response": "{response}"}}'
+            
+        return LLMResponse(text=response, raw={"fallback": True})
+
+
 def build_llm() -> BaseLLM:
-    """Factory for LLM instance."""
-    backend = os.getenv("LLM_BACKEND", "gemini")
-    if backend == "gemini":
-        return GeminiLLM()
-    # Extendable: support OpenAI, Claude, Ollama, etc.
-    return GeminiLLM()
+    """Factory for LLM instance - prioritizes Rev21 by default."""
+    backend = os.getenv("LLM_BACKEND", "rev21")
+    fallback_enabled = os.getenv("LLM_FALLBACK_ENABLED", "true").lower() == "true"
+    
+    # Always try Rev21 first if API key is available
+    rev21_available = bool(os.getenv("REV21_API_KEY"))
+    gemini_available = bool(os.getenv("GEMINI_API_KEY"))
+    
+    if backend == "rev21" and rev21_available:
+        primary_llm = Rev21LLM()
+        if fallback_enabled and gemini_available:
+            fallback_llm = GeminiLLM()
+            return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
+        return primary_llm
+    elif backend == "gemini" and gemini_available:
+        primary_llm = GeminiLLM()
+        if fallback_enabled and rev21_available:
+            fallback_llm = Rev21LLM()
+            return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
+        return primary_llm
+    else:
+        # Auto-select based on availability, prefer Rev21
+        if rev21_available:
+            primary_llm = Rev21LLM()
+            if gemini_available and fallback_enabled:
+                fallback_llm = GeminiLLM()
+                return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
+            return primary_llm
+        elif gemini_available:
+            return GeminiLLM()
+        else:
+            raise ValueError("No LLM API keys available. Set REV21_API_KEY or GEMINI_API_KEY")
 
 
 class GeminiEmbeddings(BaseEmbeddings):

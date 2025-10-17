@@ -16,9 +16,10 @@ class AgentState(BaseModel):
 
     # Agentic 
     step: int = 0
-    max_steps: int = 6
+    max_steps: int = 10
     action: Optional[Dict[str, Any]] = None
     observation: Optional[Dict[str, Any]] = None
     confidence: float = 0.0
     
-
+    # Orchestrator decision field
+    next_action: Optional[str] = None

@@ -93,7 +93,17 @@ def log_episode(question: str, plan: Optional[List[str]] = None,
         ))
 
         conn.commit()
-        return int(cursor.lastrowid)
+        episode_id = int(cursor.lastrowid)
+
+        try:
+            from .semantic import get_semantic_memory
+            if question or insight:
+                semantic_memory = get_semantic_memory()
+                semantic_memory.add_episode_to_semantic_memory(episode_id=episode_id, question=question, insight=insight)
+        except Exception as e:
+            print(f"Warning: Failed to add episode to semantic memory: {e}")
+
+        return episode_id
     
 def update_episode(ep_id: int, **fields):
     if not fields:
@@ -114,6 +124,21 @@ def update_episode(ep_id: int, **fields):
     with _conn() as c:
         c.execute("UPDATE episodes SET " + ", ".join(cols) + " WHERE id = ?", vals)
         c.commit()
+
+        if 'insight' in fields and fields['insight']:
+            try:
+                from .semantic import get_semantic_memory
+                episode = get_episode(episode_id=ep_id)
+
+                if episode:
+                    semantic = get_semantic_memory()
+                    semantic.add_episode_to_semantic_memory(
+                        episode_id=ep_id,
+                        question=episode.get('question', ''),
+                        fields=fields['insight']
+                    )
+            except Exception as e:
+                print(f"Warning: Failed to update episode in semantic memory: {e}")
 
 def search_similar(q: str, limit: int = 5) -> List[Dict[str, Any]]:
     """Search for episodes similar to the given question"""

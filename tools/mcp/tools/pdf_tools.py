@@ -18,7 +18,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, TableStyle, Table, Image
 
 
-OUTPUT_DIR = os.environ.get("PDF_OUTPUT_DIR", "output/reports")
+OUTPUT_DIR = os.environ.get("PDF_OUTPUT_DIR", os.path.join(os.getcwd(), "output", "reports"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -106,6 +106,11 @@ def generate_pdf(
     ts = time.strftime("%Y%m%d_%H%M%S")
     fname = f"{_slug(title)}_{ts}.pdf"
     fpath = os.path.join(OUTPUT_DIR, fname)
+    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
+    print(f"Creating PDF at: {fpath}")
+    print(f"Directory exists: {os.path.exists(os.path.dirname(fpath))}")
 
     # build pdf
     doc = SimpleDocTemplate(fpath, pagesize=A4)
