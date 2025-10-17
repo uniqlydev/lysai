@@ -77,7 +77,7 @@ async def main():
     print("Streaming agent reasoning")
 
     # Test with a question that should trigger PDF generation
-    async for event in app.astream(AgentState(question="Generate a report on the top actors in the database", plan=[])):
+    async for event in app.astream(AgentState(question="Conduct an analysis of all the tables and based on this, generate a report on what the schema is all about", plan=[])):
         for node_name, state in event.items():
             print(f"node executed {node_name}:")
             print(f"  Question: {state.get('question', '')}")

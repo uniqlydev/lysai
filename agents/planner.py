@@ -31,6 +31,13 @@ def planner_node(state: AgentState) -> AgentState:
     try:
         import json
         parsed = json.loads(response.text.strip())
+        # Ensure parsed is a dictionary, not a list
+        if isinstance(parsed, list):
+            # If it's a list, take the first item or create empty dict
+            parsed = parsed[0] if parsed else {}
+        elif not isinstance(parsed, dict):
+            # If it's not a dict or list, create empty dict
+            parsed = {}
     except json.JSONDecodeError:
         # Fallback to empty dict if parsing fails
         parsed = {}
