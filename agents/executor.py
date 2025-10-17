@@ -1,12 +1,21 @@
 from typing import Dict, Any
 from core.state import AgentState
 from core.mcp_client import sync_execute_sql
+from core.memory import log_episode, update_episode
 
 
 def executor_node(state: AgentState) -> AgentState:
     """
     Executor node that runs the SQL query using MCP client
     """
+
+    # Ensure an episode exists 
+    if state.episode_id is None: 
+        state.episode_id = log_episode(
+            question=state.question,
+            plan=state.plan,
+            sql=state.sql
+        )
 
     if not state.sql:
         state.error = "no_sql_to_execute"
@@ -57,6 +66,16 @@ def executor_node(state: AgentState) -> AgentState:
         # Handle any unexpected errors
         state.rows = []
         state.error = f"Executor error: {str(e)}"
+
+    # Update episode with execution results
+    if state.episode_id:
+        update_fields = {
+            "sql": state.sql,
+            "rows": state.rows,
+            "error": state.error,
+            "outcome": "success" if not state.error and state.rows else "error"
+        }
+        update_episode(state.episode_id, **update_fields)
 
     # Add to history
     state.history.append({

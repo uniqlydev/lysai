@@ -1,5 +1,6 @@
 from core.state import AgentState
 from core.utils import llm_json
+from core.memory import update_episode
 
 SUMMARIZER_SYS = """
 You convert tabular rows into a concise insight (<=120 words).
@@ -35,6 +36,10 @@ def summarizer_node(state: AgentState) -> AgentState:
     except json.JSONDecodeError:
         # Fallback to empty dict if parsing fails
         j = {"insight": "Failed to parse summary", "caveats": "JSON parsing error"}
+
+    # Update episode with the generated insight
+    if state.episode_id and j.get("insight"):
+        update_episode(state.episode_id, insight=j["insight"])
 
     state.history.append({
         "summarizer": j

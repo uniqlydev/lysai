@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "asyncio>=4.0.0",
+    "chromadb>=1.1.1",
     "fastmcp>=2.12.4",
     "google-genai>=1.43.0",
     "httpx>=0.28.1",
@@ -15,5 +16,6 @@ dependencies = [
     "psycopg2>=2.9.11",
     "pydantic>=2.12.0",
     "python-dotenv>=1.1.1",
+    "pyyaml>=6.0.3",
     "reportlab>=4.4.4",
 ]

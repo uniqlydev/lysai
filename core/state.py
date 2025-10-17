@@ -12,4 +12,13 @@ class AgentState(BaseModel):
     error: Optional[str] = None
     available_tools: Optional[List[Dict[str, Any]]] = None
     history: List[Dict[str, Any]] = Field(default_factory=list)
+    episode_id: Optional[int] = None
+
+    # Agentic 
+    step: int = 0
+    max_steps: int = 6
+    action: Optional[Dict[str, Any]] = None
+    observation: Optional[Dict[str, Any]] = None
+    confidence: float = 0.0
+    
 

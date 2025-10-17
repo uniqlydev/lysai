@@ -6,6 +6,7 @@ from agents.reflector import reflector_node
 from agents.summarizer import summarizer_node
 from agents.tool_inspector import tool_inspector_node
 from agents.pdf_generator import pdf_generator_node
+from core.memory import init_database as init_memory
 import asyncio
 
 def should_reflect(state: AgentState) -> str: 
@@ -45,6 +46,7 @@ def should_generate_pdf(state: AgentState) -> str:
 
 # Build the graph to compile 
 graph = StateGraph(AgentState)
+init_memory()
 
 graph.add_node("tool_inspector", tool_inspector_node)
 graph.add_node("planner", planner_node)
@@ -77,7 +79,7 @@ async def main():
     print("Streaming agent reasoning")
 
     # Test with a question that should trigger PDF generation
-    async for event in app.astream(AgentState(question="Conduct an analysis of all the tables and based on this, generate a report on what the schema is all about", plan=[])):
+    async for event in app.astream(AgentState(question="List all the top actors and generate a pdf report.", plan=[])):
         for node_name, state in event.items():
             print(f"node executed {node_name}:")
             print(f"  Question: {state.get('question', '')}")
