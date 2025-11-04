@@ -85,6 +85,107 @@ class GeminiLLM(BaseLLM):
                 time.sleep(0.8 * (2 ** attempt))
 
 
+class OllamaLLM(BaseLLM):
+    """
+    Ollama local LLM wrapper for local inference.
+    """
+
+    def __init__(self, model: Optional[str] = None, base_url: Optional[str] = None):
+        self.model = model or os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+        # Use provided URL, environment variable, or auto-discover
+        if base_url:
+            self.base_url = base_url
+        elif os.getenv("OLLAMA_BASE_URL"):
+            self.base_url = os.getenv("OLLAMA_BASE_URL")
+        else:
+            self.base_url = self._find_ollama_url()
+    
+    def _is_docker_environment(self) -> bool:
+        """Check if we're running in a Docker/containerized environment."""
+        # Check for common Docker environment indicators
+        return (
+            os.path.exists("/.dockerenv") or  # Standard Docker indicator
+            os.environ.get("DOCKER_CONTAINER") == "true" or  # Custom indicator
+            "microsoft" in os.uname().release.lower()  # WSL environment
+        )
+    
+    def _find_ollama_url(self) -> str:
+        """Try to find the correct Ollama URL by testing different possibilities."""
+        # Since both app and Docker are in WSL, try localhost first
+        possible_urls = [
+            "http://localhost:11434",  # Docker port mapping in WSL
+            "http://127.0.0.1:11434",  # Explicit localhost
+        ]
+        
+        for url in possible_urls:
+            try:
+                response = requests.get(f"{url}/api/version", timeout=5)
+                if response.status_code == 200:
+                    print(f"Found Ollama at: {url}")
+                    return url
+            except Exception as e:
+                print(f"Failed to connect to {url}: {str(e)[:100]}...")
+                continue
+        
+        print("Warning: Could not connect to Ollama service, using default URL")
+        return "http://localhost:11434"
+        
+    def generate(
+        self,
+        prompt: Union[str, Iterable[Any]],
+        *,
+        system_instruction: Optional[str] = None,
+        json_mode: bool = False,
+        temperature: float = 0.3,
+        max_retries: int = 3,
+        **kwargs,
+    ) -> LLMResponse:
+        # Prepare the prompt content
+        if isinstance(prompt, str):
+            content = prompt
+        else:
+            content = str(prompt)
+        
+        # Add system instruction if provided
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": content})
+        
+        # Prepare request payload
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": temperature
+            }
+        }
+        
+        # Add JSON mode instruction if requested
+        if json_mode:
+            payload["format"] = "json"
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/api/chat",
+                    json=payload,
+                    timeout=60
+                )
+                response.raise_for_status()
+                
+                result = response.json()
+                text = result.get("message", {}).get("content", "")
+                
+                return LLMResponse(text=text, raw=result)
+                
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(0.8 * (2 ** attempt))
+
+
 class Rev21LLM(BaseLLM):
     """
     Rev21 API LLM wrapper for fallback functionality.
@@ -267,38 +368,65 @@ class FallbackLLM(BaseLLM):
 
 
 def build_llm() -> BaseLLM:
-    """Factory for LLM instance - prioritizes Rev21 by default."""
+    """Factory for LLM instance - prioritizes Rev21 by default, falls back to local Ollama."""
     backend = os.getenv("LLM_BACKEND", "rev21")
     fallback_enabled = os.getenv("LLM_FALLBACK_ENABLED", "true").lower() == "true"
     
-    # Always try Rev21 first if API key is available
+    # Check availability of different LLM services
     rev21_available = bool(os.getenv("REV21_API_KEY"))
     gemini_available = bool(os.getenv("GEMINI_API_KEY"))
     
+    # Check if .env file exists and has any API keys
+    env_file_exists = os.path.exists(".env")
+    has_api_keys = rev21_available or gemini_available
+    
+    # If no .env file or no API keys, use local Ollama as primary
+    if not env_file_exists or not has_api_keys:
+        print("No API keys found, using local Ollama LLM")
+        return OllamaLLM()
+    
     if backend == "rev21" and rev21_available:
         primary_llm = Rev21LLM()
-        if fallback_enabled and gemini_available:
-            fallback_llm = GeminiLLM()
-            return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
+        if fallback_enabled:
+            if gemini_available:
+                fallback_llm = GeminiLLM()
+                return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
+            else:
+                # Use Ollama as fallback if Gemini not available
+                fallback_llm = OllamaLLM()
+                return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
         return primary_llm
     elif backend == "gemini" and gemini_available:
         primary_llm = GeminiLLM()
-        if fallback_enabled and rev21_available:
-            fallback_llm = Rev21LLM()
-            return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
+        if fallback_enabled:
+            if rev21_available:
+                fallback_llm = Rev21LLM()
+                return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
+            else:
+                # Use Ollama as fallback if Rev21 not available
+                fallback_llm = OllamaLLM()
+                return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
         return primary_llm
+    elif backend == "ollama":
+        return OllamaLLM()
     else:
         # Auto-select based on availability, prefer Rev21
         if rev21_available:
             primary_llm = Rev21LLM()
-            if gemini_available and fallback_enabled:
-                fallback_llm = GeminiLLM()
+            if fallback_enabled:
+                fallback_llm = GeminiLLM() if gemini_available else OllamaLLM()
                 return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
             return primary_llm
         elif gemini_available:
-            return GeminiLLM()
+            primary_llm = GeminiLLM()
+            if fallback_enabled:
+                fallback_llm = OllamaLLM()
+                return FallbackLLM(primary=primary_llm, fallback=fallback_llm)
+            return primary_llm
         else:
-            raise ValueError("No LLM API keys available. Set REV21_API_KEY or GEMINI_API_KEY")
+            # Final fallback to local Ollama
+            print("No API keys available, using local Ollama LLM")
+            return OllamaLLM()
 
 
 class GeminiEmbeddings(BaseEmbeddings):

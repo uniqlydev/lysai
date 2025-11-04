@@ -55,16 +55,27 @@ def planner_node(state: AgentState) -> AgentState:
     try:
         import json
         
-        # Check if response.raw contains the actual parsed data (Rev21 format)
-        if hasattr(response, 'raw') and isinstance(response.raw, dict):
-            if 'response' in response.raw:
-                # Rev21 format: {"response": {"plan": [...], "sql_candidate": "...", ...}}
-                parsed = response.raw['response']
-            else:
-                parsed = response.raw
-        else:
-            # Try to parse the text response (Gemini format)
+        # First try to parse the text response directly (works for most LLMs including Ollama)
+        try:
             parsed = json.loads(response.text.strip())
+            print(f"Successfully parsed JSON from text response")
+        except json.JSONDecodeError:
+            # If text parsing fails, try the raw response structure
+            if hasattr(response, 'raw') and isinstance(response.raw, dict):
+                if 'response' in response.raw:
+                    # Rev21 format: {"response": {"plan": [...], "sql_candidate": "...", ...}}
+                    parsed = response.raw['response']
+                    print(f"Using Rev21 format from raw response")
+                elif 'message' in response.raw and 'content' in response.raw['message']:
+                    # Ollama format: {"message": {"content": "..."}}
+                    content = response.raw['message']['content']
+                    parsed = json.loads(content.strip())
+                    print(f"Successfully parsed JSON from Ollama message content")
+                else:
+                    parsed = response.raw
+                    print(f"Using raw response directly")
+            else:
+                raise ValueError("No parseable JSON found")
         
         # Ensure parsed is a dictionary, not a list
         if isinstance(parsed, list):
@@ -74,9 +85,12 @@ def planner_node(state: AgentState) -> AgentState:
             # If it's not a dict or list, create empty dict
             parsed = {}
             
-    except (json.JSONDecodeError, KeyError, AttributeError) as e:
+    except (json.JSONDecodeError, KeyError, AttributeError, ValueError) as e:
         print(f"Warning: Could not parse planner response: {e}")
-        print(f"Raw response: {response.text}")
+        print(f"Raw response text: {response.text[:200]}...")
+        print(f"Raw response structure: {type(response.raw)}")
+        if hasattr(response, 'raw'):
+            print(f"Raw response keys: {list(response.raw.keys()) if isinstance(response.raw, dict) else 'Not a dict'}")
         # Fallback to empty dict if parsing fails
         parsed = {}
     

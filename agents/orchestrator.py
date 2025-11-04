@@ -53,6 +53,12 @@ def orchestrator_node(state: AgentState) -> AgentState:
     # Build context for decision making
     context = _build_decision_context(state, learning_context)
     
+    # Check if tool inspection has been done  
+    tool_inspection_done = any(
+        isinstance(entry, dict) and entry.get('role') == 'tool_inspector' 
+        for entry in state.history
+    )
+    
     # Get LLM to reason about next action
     prompt = f"""You are an intelligent orchestrator for a data analysis agent. Your job is to reason about what action to take next based on the current state.
 
@@ -68,28 +74,34 @@ AVAILABLE ACTIONS:
 - GENERATE_PDF: Create a PDF report
 - DONE: Task is complete
 
-REASONING GUIDELINES:
-1. INSPECT_TOOLS: Only if available_tools is empty/None (not already done)
-2. PLAN: If no clear plan exists and no similar patterns available
-3. EXECUTE: If we have a plan AND SQL query AND no data yet (PRIORITIZE this!)
-4. REFLECT: If there are REAL errors that need analysis (not state indicators like "no_sql_to_execute")
-5. SUMMARIZE: If we have data but no insights yet (DON'T repeat if insights already exist)
-6. GENERATE_PDF: If question mentions "PDF" AND we have data AND insights AND PDF not generated yet
-7. DONE: If question is fully answered AND PDF is generated (if requested)
+CRITICAL DECISION RULES (in order of priority):
+1. If Tools Inspected=No: choose INSPECT_TOOLS
+2. If Tools Inspected=Yes AND Plan Exists=No: choose PLAN  
+3. If Plan Exists=Yes AND SQL Query=Missing: choose PLAN (plan failed, retry)
+4. If SQL Query=Present AND Data Rows=Missing: choose EXECUTE (MANDATORY!)
+5. If Data Rows=Present AND Has Insights=No: choose SUMMARIZE (MANDATORY!)
+6. If PDF requested AND Has Insights=Yes AND PDF Generated=No: choose GENERATE_PDF
+7. If PDF Generated=Yes OR task complete: choose DONE
+8. If real errors exist: choose REFLECT
 
-CRITICAL WORKFLOW: 
-- If we have plan + SQL but no data: ALWAYS choose EXECUTE
-- If PDF already generated: ALWAYS choose DONE (task complete)
-- For PDF generation: MUST do SUMMARIZE first to generate insights, then GENERATE_PDF once
-- Once insights exist, move to GENERATE_PDF immediately if PDF requested
-- NEVER repeat GENERATE_PDF if PDF already generated successfully
-- Ignore state indicators like "no_sql_to_execute" - these are not real errors
-- Available tools: {"Present" if state.available_tools else "Missing"}
-- SQL query: {"Present" if state.sql else "Missing"}  
-- Data rows: {"Present" if state.rows else "Missing"}
-- Error: {"Present" if state.error else "None"}
+NEVER SKIP EXECUTE if SQL exists but no data!
+NEVER repeat the same action if it was just completed successfully!
 
-Based on the current state, what should the next action be?
+CURRENT STATE ANALYSIS:
+- Tools Available: {"Present" if state.available_tools else "Missing"}
+- Tools Inspected: {"Yes" if tool_inspection_done else "No"}
+- Plan Exists: {"Yes" if state.plan else "No"}
+- SQL Query: {"Present" if state.sql and state.sql.strip() else "Missing"}  
+- Data Rows: {"Present" if state.rows else "Missing"}
+- Has Insights: {"Yes" if has_insights else "No"}
+
+Based on the decision rules above, what should the next action be?
+
+IMPORTANT: Look at Tools Inspected status - if Yes, never choose INSPECT_TOOLS again!
+IMPORTANT: If Plan Exists=No, you MUST choose PLAN to create a plan and SQL query!
+IMPORTANT: If SQL Query=Present but Data Rows=Missing, you MUST choose EXECUTE!
+IMPORTANT: If Data Rows=Present but Has Insights=No, you MUST choose SUMMARIZE!
+IMPORTANT: Never claim insights exist when Has Insights=No!
 
 Respond with just the action name (e.g., "PLAN", "EXECUTE", etc.) and a brief reason why."""
 
@@ -201,8 +213,14 @@ def _fallback_decision(state: AgentState) -> str:
     # Check for real errors (not just state indicators)
     real_error = state.error and state.error not in ["no_sql_to_execute", "no_data", "no_plan"]
     
+    # Check if tool inspection has been done
+    tool_inspection_done = any(
+        isinstance(entry, dict) and entry.get('role') == 'tool_inspector' 
+        for entry in state.history
+    )
+    
     # Priority logic
-    if not state.available_tools:
+    if not state.available_tools and not tool_inspection_done:
         return "INSPECT_TOOLS"
     elif real_error and len([h for h in state.history if h.get('agent') == 'reflector']) < 2:
         return "REFLECT"
@@ -242,6 +260,12 @@ def _build_decision_context(state: AgentState, learning_context: Dict[str, Any])
                 has_insights = True
                 break
     
+    # Check if tool inspection has been done
+    tool_inspection_done = any(
+        isinstance(entry, dict) and entry.get('role') == 'tool_inspector' 
+        for entry in state.history
+    )
+    
     # Check if PDF was requested in the question
     pdf_requested = "pdf" in state.question.lower()
     
@@ -262,9 +286,11 @@ def _build_decision_context(state: AgentState, learning_context: Dict[str, Any])
         f"PDF Generated: {'Yes' if pdf_generated else 'No'}",
         f"Current Step: {state.step}/{state.max_steps}",
         f"Tools Available: {'Yes (' + str(len(state.available_tools)) + ' tools)' if state.available_tools else 'No'}",
+        f"Tools Inspected: {'Yes' if tool_inspection_done else 'No'}",
         f"Plan Exists: {'Yes (' + str(len(state.plan)) + ' steps)' if state.plan else 'No'}",
         f"SQL Query: {'Yes' if state.sql else 'No'}",
         f"Has Results: {'Yes (' + str(len(state.rows)) + ' rows)' if state.rows else 'No'}",
+        f"**EXECUTE NEEDED**: {'YES - SQL exists but no data!' if state.sql and not state.rows else 'No'}",
         f"Has Insights: {'Yes' if has_insights else 'No'}",
         f"Has Error: {'Yes' if real_error else 'No'}",
     ]
